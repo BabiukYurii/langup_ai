@@ -16,6 +16,7 @@ class FakeOllama(OllamaClient):
         self.alive = alive
         self.last_messages: list[ChatMessage] | None = None
         self.last_model: str | None = None
+        self.last_keep_alive: int | str | None = None
 
     async def chat(
         self,
@@ -23,9 +24,11 @@ class FakeOllama(OllamaClient):
         json_format: bool,
         temperature: float,
         model: str | None = None,
+        keep_alive: int | str | None = None,
     ) -> str:
         self.last_messages = messages
         self.last_model = model
+        self.last_keep_alive = keep_alive
         return self.output
 
     async def list_models(self) -> list[str] | None:

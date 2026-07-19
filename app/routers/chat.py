@@ -13,5 +13,11 @@ async def chat(data: ChatRequest, llm: OllamaClientDep) -> ChatResponse:
 
     All domain logic (prompts, parsing, validation) lives in the main backend.
     """
-    content = await llm.chat(data.messages, data.json_format, data.temperature, model=data.model)
+    content = await llm.chat(
+        data.messages,
+        data.json_format,
+        data.temperature,
+        model=data.model,
+        keep_alive=data.keep_alive,
+    )
     return ChatResponse(content=content, model=data.model or llm.model)

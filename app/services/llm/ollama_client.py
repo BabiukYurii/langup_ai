@@ -23,6 +23,7 @@ class OllamaClient:
         json_format: bool,
         temperature: float,
         model: str | None = None,
+        keep_alive: int | str | None = None,
     ) -> str:
         """One-shot chat completion; returns the raw content string."""
         payload = {
@@ -33,6 +34,9 @@ class OllamaClient:
         }
         if json_format:
             payload["format"] = "json"
+        if keep_alive is not None:
+            # Sent only when asked for, so Ollama keeps applying its own default.
+            payload["keep_alive"] = keep_alive
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(f"{self.base_url}/api/chat", json=payload)

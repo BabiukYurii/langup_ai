@@ -17,6 +17,13 @@ class ChatRequest(BaseModel):
     temperature: float = Field(0.7, ge=0.0, le=2.0)
     # Optional override of the default model (must already be pulled on the server).
     model: str | None = None
+    # How long Ollama keeps this model resident after the call: seconds as an
+    # int, a duration string like "10m", 0 to unload immediately, -1 to pin it.
+    # None leaves Ollama's own default (5m) in charge.
+    #
+    # Callers that reach for a heavy model on rare occasions should pass 0, so
+    # it releases the RAM instead of idling for minutes.
+    keep_alive: int | str | None = None
 
 
 class ChatResponse(BaseModel):
