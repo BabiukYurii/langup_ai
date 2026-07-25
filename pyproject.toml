@@ -1,7 +1,7 @@
 [project]
 name = "langup-ai"
 version = "0.1.0"
-description = "LangUp AI microservice: exercise/text generation via local Ollama"
+description = "LangUp AI microservice: exercise/text generation via local llama.cpp"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

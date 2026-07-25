@@ -6,8 +6,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import settings
 from app.schemas.chat import ChatMessage
-from app.services.llm.ollama_client import OllamaClient, get_ollama_client
-from tests.conftest import FakeOllama
+from app.services.llm.llamacpp_client import LlamaCppClient, get_llm_client
+from tests.conftest import FakeLLM
 
 BODY = {
     "messages": [
@@ -48,23 +48,25 @@ async def test_accepts_images_for_vision_models(client):
     assert resp.status_code == 200
 
 
-async def test_model_override(client):
+async def test_model_override_is_ignored(client):
+    # the server runs one model; an override in the request must not change it
     resp = await client.post("/chat", json={**BODY, "model": "tiny-test-model"})
     assert resp.status_code == 200
-    assert resp.json()["model"] == "tiny-test-model"
+    assert resp.json()["model"] != "tiny-test-model"
 
 
-# --- keep_alive ------------------------------------------------------------
+# --- what actually goes over the wire to llama.cpp -------------------------
 
 
 @pytest.fixture
-def ollama_payload(monkeypatch):
-    """Capture the body OllamaClient actually sends to Ollama."""
+def llamacpp_payload(monkeypatch):
+    """Capture the body LlamaCppClient sends to the llama.cpp /v1 endpoint."""
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.update(json.loads(request.content))
-        return httpx.Response(200, json={"message": {"content": "{}"}})
+        captured["__url__"] = str(request.url)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(
@@ -78,27 +80,40 @@ def ollama_payload(monkeypatch):
 MESSAGES = [ChatMessage(role="user", content="hi")]
 
 
-async def test_keep_alive_reaches_ollama(ollama_payload):
-    # 0 means "unload as soon as this call is done" — the point of the field
-    await OllamaClient().chat(MESSAGES, json_format=True, temperature=0.1, keep_alive=0)
-    assert ollama_payload["keep_alive"] == 0
+async def test_sends_openai_chat_completions(llamacpp_payload):
+    out = await LlamaCppClient().chat(MESSAGES, json_format=True, temperature=0.3)
+    assert out == "{}"
+    assert llamacpp_payload["__url__"].endswith("/v1/chat/completions")
+    assert llamacpp_payload["temperature"] == 0.3
+    assert llamacpp_payload["stream"] is False
+    assert llamacpp_payload["messages"] == [{"role": "user", "content": "hi"}]
 
 
-async def test_keep_alive_accepts_a_duration_string(ollama_payload):
-    await OllamaClient().chat(MESSAGES, json_format=True, temperature=0.1, keep_alive="10m")
-    assert ollama_payload["keep_alive"] == "10m"
+async def test_json_format_sets_response_format(llamacpp_payload):
+    await LlamaCppClient().chat(MESSAGES, json_format=True, temperature=0.1)
+    assert llamacpp_payload["response_format"] == {"type": "json_object"}
 
 
-async def test_keep_alive_is_omitted_when_not_asked_for(ollama_payload):
-    # leaving it out must not override Ollama's own default
-    await OllamaClient().chat(MESSAGES, json_format=True, temperature=0.1)
-    assert "keep_alive" not in ollama_payload
+async def test_plain_format_omits_response_format(llamacpp_payload):
+    await LlamaCppClient().chat(MESSAGES, json_format=False, temperature=0.1)
+    assert "response_format" not in llamacpp_payload
 
 
-async def test_request_keep_alive_is_passed_through(app):
-    # the whole path: HTTP body -> ChatRequest -> OllamaClient.chat
-    fake = FakeOllama()
-    app.dependency_overrides[get_ollama_client] = lambda: fake
+async def test_model_and_keep_alive_never_reach_the_server(llamacpp_payload):
+    # both are accepted at the gateway API for compatibility, but a single
+    # always-resident model means there is nothing to send downstream
+    await LlamaCppClient().chat(MESSAGES, json_format=True, temperature=0.1, model="x", keep_alive=0)
+    assert "keep_alive" not in llamacpp_payload
+    assert llamacpp_payload["model"] == LlamaCppClient().model  # the server's model, not "x"
+
+
+# --- the compat fields still flow through the gateway API ------------------
+
+
+async def test_request_fields_reach_the_client(app):
+    # the whole path: HTTP body -> ChatRequest -> LlamaCppClient.chat
+    fake = FakeLLM()
+    app.dependency_overrides[get_llm_client] = lambda: fake
 
     transport = ASGITransport(app=app)
     headers = {"X-API-Key": settings.API_KEY}
@@ -112,3 +127,38 @@ async def test_request_keep_alive_is_passed_through(app):
 async def test_rejects_invalid_keep_alive(client):
     resp = await client.post("/chat", json={**BODY, "keep_alive": {"bad": "type"}})
     assert resp.status_code == 422
+
+
+# --- fenced JSON gets unwrapped -------------------------------------------
+
+
+def _server_returning(content: str, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *a, **kw: real_client(*a, **{**kw, "transport": httpx.MockTransport(handler)}),
+    )
+
+
+async def test_strips_markdown_json_fence(monkeypatch):
+    # Gemma wraps JSON in ```json … ```; the backend needs the bare object
+    _server_returning('```json\n{"translation": "берег"}\n```', monkeypatch)
+    out = await LlamaCppClient().chat(MESSAGES, json_format=True, temperature=0.1)
+    assert out == '{"translation": "берег"}'
+
+
+async def test_leaves_plain_json_untouched(monkeypatch):
+    _server_returning('{"ok": true}', monkeypatch)
+    out = await LlamaCppClient().chat(MESSAGES, json_format=True, temperature=0.1)
+    assert out == '{"ok": true}'
+
+
+async def test_does_not_strip_when_not_json_mode(monkeypatch):
+    # plain-text mode returns content verbatim, fences and all
+    _server_returning("```\nsome text\n```", monkeypatch)
+    out = await LlamaCppClient().chat(MESSAGES, json_format=False, temperature=0.1)
+    assert out == "```\nsome text\n```"

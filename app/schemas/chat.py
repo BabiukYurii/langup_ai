@@ -6,23 +6,20 @@ from pydantic import BaseModel, Field
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: str
-    # Base64-encoded images for vision-language models (Ollama /api/chat format).
+    # Base64-encoded images for vision-language models. Accepted for forward
+    # compatibility; the current llama.cpp text path does not forward them.
     images: list[str] | None = None
 
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
-    # When true, Ollama constrains decoding to valid JSON (format="json").
+    # When true, the server constrains decoding to valid JSON (response_format).
     json_format: bool = True
     temperature: float = Field(0.7, ge=0.0, le=2.0)
-    # Optional override of the default model (must already be pulled on the server).
+    # Accepted for backward compatibility but ignored: the llama.cpp server runs
+    # a single always-resident model, so there is nothing to switch (`model`) or
+    # unload (`keep_alive`). See LlamaCppClient.chat.
     model: str | None = None
-    # How long Ollama keeps this model resident after the call: seconds as an
-    # int, a duration string like "10m", 0 to unload immediately, -1 to pin it.
-    # None leaves Ollama's own default (5m) in charge.
-    #
-    # Callers that reach for a heavy model on rare occasions should pass 0, so
-    # it releases the RAM instead of idling for minutes.
     keep_alive: int | str | None = None
 
 

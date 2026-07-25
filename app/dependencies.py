@@ -3,6 +3,6 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.services.llm.ollama_client import OllamaClient, get_ollama_client
+from app.services.llm.llamacpp_client import LlamaCppClient, get_llm_client
 
-OllamaClientDep = Annotated[OllamaClient, Depends(get_ollama_client)]
+LLMClientDep = Annotated[LlamaCppClient, Depends(get_llm_client)]

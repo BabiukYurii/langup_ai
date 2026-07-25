@@ -4,10 +4,10 @@ from httpx import ASGITransport, AsyncClient
 from app.core.config import settings
 from app.main import create_app
 from app.schemas.chat import ChatMessage
-from app.services.llm.ollama_client import OllamaClient, get_ollama_client
+from app.services.llm.llamacpp_client import LlamaCppClient, get_llm_client
 
 
-class FakeOllama(OllamaClient):
+class FakeLLM(LlamaCppClient):
     """In-memory stand-in: returns a canned response, no network."""
 
     def __init__(self, output: str = '{"ok": true}', alive: bool = True) -> None:
@@ -32,13 +32,13 @@ class FakeOllama(OllamaClient):
         return self.output
 
     async def list_models(self) -> list[str] | None:
-        return [self.model, "tiny-test-model"] if self.alive else None
+        return [self.model] if self.alive else None
 
 
 @pytest_asyncio.fixture
 async def app():
     application = create_app()
-    application.dependency_overrides[get_ollama_client] = lambda: FakeOllama()
+    application.dependency_overrides[get_llm_client] = lambda: FakeLLM()
     return application
 
 

@@ -9,36 +9,52 @@ services:
     env_file:
       - .env
     environment:
-      # inside the compose network Ollama is reachable by service name
-      OLLAMA_BASE_URL: http://ollama:11434
+      # inside the compose network the llama.cpp server is reachable by name
+      LLAMACPP_BASE_URL: http://llamacpp:8000
     ports:
       - "8002:8000"
     restart: unless-stopped
     depends_on:
-      ollama:
-        condition: service_healthy
+      # start once the model server's process is up; the gateway reports
+      # "degraded" until the model finishes loading, then heals on its own.
+      llamacpp:
+        condition: service_started
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: langup-ai-ollama
-    # Serve, then pull the configured model if it is not present yet.
-    # OLLAMA_MODEL comes from .env (compose interpolation).
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        sleep 3
-        ollama pull "${OLLAMA_MODEL}"
-        wait
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+    container_name: langup-ai-llamacpp
+    # AMD Radeon 780M via the Vulkan (RADV) backend — no ROCm, no HSA hacks.
+    # The weights live in the iGPU's dedicated VRAM carveout, so they do NOT
+    # eat the system RAM the other containers on this box need.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      # GIDs of the host's video/render groups that own /dev/dri (Ubuntu: 44,
+      # render varies per host — 990 here). Needed to touch the render node.
+      - "44"
+      - "990"
+    # Serve a GGUF pre-downloaded into ./models, fully offloaded to the GPU
+    # (-ngl 99). A 12 GB `-hf` pull at container start proved unreliable (the
+    # connection drops mid-transfer); download it once with `wget -c` instead —
+    # see README. --jinja uses the model's own chat template (Gemma needs it).
+    # --reasoning-budget 0 turns OFF Gemma-4's built-in thinking: it otherwise
+    # spends hundreds-to-thousands of reasoning tokens per reply (~150 s per
+    # exercise); without it, generation drops to a few seconds with no quality
+    # loss for our JSON tasks.
+    command: >
+      -m /models/${LLAMACPP_MODEL_FILE}
+      -ngl 99
+      -c ${LLAMACPP_CONTEXT:-8192}
+      --host 0.0.0.0 --port 8000
+      --jinja
+      --reasoning-budget 0
     volumes:
-      - ollama_models:/root/.ollama
-    # NOT exposed to the host: only the gateway (with its API key) may talk to it.
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 30  # first boot downloads the model — give it time
+      - ./models:/models:ro
+    # Bound logs: a runaway container once filled the disk with its json log.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # NOT exposed to the host: only the gateway (with its API key) may reach it.
     restart: unless-stopped
-
-volumes:
-  ollama_models:

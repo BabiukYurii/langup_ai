@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 
 
 class LLMUnavailableException(Exception):
-    """Ollama is unreachable or timed out."""
+    """The llama.cpp server is unreachable or timed out."""
 
     def __init__(self, message: str = "LLM backend is unavailable") -> None:
         self.message = message
